@@ -87,11 +87,11 @@
         const CANVAS_SIZE = 500;
         const BOUNDARY_RADIUS = 150;
         const BALL_RADIUS = 8.25; // Increased by 25% (was 6.6)
-        const TIME_LIMIT = 4.0; // seconds each ball has to escape
+        const TIME_LIMIT = 2.0; // seconds each ball has to escape
         const CIRCLE_COLOR_CYCLE = 5.0; // seconds for circle color cycle
         const BALL_COLOR_CYCLE_MIN = 2.5; // minimum seconds for ball color cycle
         const BALL_COLOR_CYCLE_MAX = 3.0; // maximum seconds for ball color cycle
-        const GAP_SIZE = (Math.PI / 3) * 0.36 * 1.75; // Gap size in radians (40% larger, now ~38.5 degrees)
+        const GAP_SIZE = (Math.PI / 3) * 0.36 * 1.75 * 0.5; // Gap size in radians (reduced by 50%, now ~19.25 degrees)
         const GAP_ANGLE = 5 * Math.PI / 4; // Base gap position (top left, 225 degrees)
         const ROTATION_SPEED = Math.PI / 2; // Rotation speed in radians per second (90 degrees per second)
         const GRAVITY = 300; // pixels per second squared
@@ -121,11 +121,11 @@
         
         // Global state
         let activeBall = null; // Only one active ball at a time
-        let frozenBalls = []; // Balls that have frozen after 4 seconds
+        let frozenBalls = []; // Balls that have frozen after 2 seconds
         let confettiParticles = []; // Confetti particles for explosion effect
         let collisionParticles = []; // Collision effect particles
         let gameStarted = false;
-        let gameTimer = 0; // Timer for current ball (0-4 seconds)
+        let gameTimer = 0; // Timer for current ball (0-2 seconds)
         let circleColorTimer = 0; // Timer for circle color cycle (0-5 seconds)
         let escapeFlashTimer = 0; // Timer for escape flash effect
         let lastFrameTime = 0;
@@ -298,7 +298,7 @@
                 
                 // Initial velocity: mostly downward with random angle variation (up to 20 degrees left/right)
                 // Faster initial speed for rapid bouncing
-                const speed = (50 + Math.random() * 50) * 4.5; // Downward velocity between 225-450 pixels per second (faster)
+                const speed = (50 + Math.random() * 50) * 9.0; // Downward velocity between 450-900 pixels per second (doubled)
                 const angleVariation = (Math.random() * 40 - 20) * (Math.PI / 180); // Random angle between -20 and +20 degrees
                 const downwardAngle = Math.PI / 2 + angleVariation; // Straight down (π/2) plus variation
                 this.vx = Math.cos(downwardAngle) * speed;
@@ -677,11 +677,11 @@
             if (activeBall && !activeBall.frozen && !gameWon) {
                 gameTimer += deltaTime;
                 
-                // Check if 4 seconds have passed
+                // Check if 2 seconds have passed
                 if (gameTimer >= TIME_LIMIT) {
                     // Freeze the ball
                     activeBall.frozen = true;
-                    activeBall.freezeTime = TIME_LIMIT; // Store the timer value when frozen (4 seconds)
+                    activeBall.freezeTime = TIME_LIMIT; // Store the timer value when frozen (2 seconds)
                     activeBall.frozenColor = activeBall.getBallColor(); // Store the color at the moment it freezes
                     frozenBalls.push(activeBall);
                     activeBall = null;
@@ -898,7 +898,7 @@
             textSize(28); // Larger size
             textStyle(BOLD); // Bold to match countdown numbers
             text("Each ball only has", CANVAS_SIZE / 2, 20);
-            text("4 Seconds to escape", CANVAS_SIZE / 2, 50);
+            text("2 Seconds to escape", CANVAS_SIZE / 2, 50);
         }
         
         // Draw countdown timer in the center of the circle
@@ -910,8 +910,8 @@
             
             // Only show countdown if there's time remaining
             if (remainingTime > 0) {
-                // Get the countdown number (4, 3, 2, 1)
-                const countdownNumber = Math.ceil(remainingTime);
+                // Get the countdown number with one decimal place
+                const countdownNumber = remainingTime.toFixed(1);
                 
                 // Draw countdown text in white, centered in the circle
                 fill(255, 255, 255); // White
@@ -919,7 +919,7 @@
                 textAlign(CENTER, CENTER);
                 textSize(72); // Large text size for visibility
                 textStyle(BOLD);
-                text(countdownNumber.toString(), CANVAS_SIZE / 2, CANVAS_SIZE / 2);
+                text(countdownNumber, CANVAS_SIZE / 2, CANVAS_SIZE / 2);
             }
         }
     </script>
