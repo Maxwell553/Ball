@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ball Escape Simulation</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #000;
+            font-family: Arial, sans-serif;
+            overflow: hidden; /* Prevent scrolling for screen recording */
+        }
+        #canvas-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+        #startButton {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+            padding: 15px 30px;
+            font-size: 20px;
+            font-weight: bold;
+            color: #fff;
+            background: #00ff00;
+            border: 2px solid #00ff00;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.6);
+            transition: all 0.3s ease;
+        }
+        #startButton:hover {
+            background: #00cc00;
+            box-shadow: 0 0 30px rgba(0, 255, 0, 0.9);
+            transform: translate(-50%, -50%) scale(1.05);
+        }
+        #startButton.hidden {
+            display: none;
+        }
+        #restartButton {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 100;
+            padding: 10px 20px;
+            font-size: 16px;
+            font-weight: bold;
+            color: #fff;
+            background: rgba(255, 100, 100, 0.8);
+            border: 2px solid #ff6464;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 0 15px rgba(255, 100, 100, 0.5);
+            transition: all 0.3s ease;
+        }
+        #restartButton:hover {
+            background: rgba(255, 100, 100, 1);
+            box-shadow: 0 0 25px rgba(255, 100, 100, 0.8);
+            transform: scale(1.05);
+        }
+        #restartButton.hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container">
+        <button id="startButton">Start</button>
+        <button id="restartButton" class="hidden">Restart</button>
+    </div>
+
+    <script>
+        // ============================================
+        // BALL ESCAPE SIMULATION - p5.js
+        // ============================================
+        // Simulation Parameters
+        const CANVAS_SIZE = 500;
+        const BOUNDARY_RADIUS = 150;
+        const BALL_RADIUS = 8.25;
+        const TIME_LIMIT = 4.0; // seconds each ball has to escape (increased from 2.0)
+        const CIRCLE_COLOR_CYCLE = 5.0; // seconds for circle color cycle
+        const BALL_COLOR_CYCLE_MIN = 2.5; // minimum seconds for ball color cycle
+        const BALL_COLOR_CYCLE_MAX = 3.0; // maximum seconds for ball color cycle
+        const GAP_SIZE = (Math.PI / 3) * 0.36 * 1.75 * 0.5 * 2.5; // Gap size in radians (150% bigger, ~48 degrees)
+        const GAP_ANGLE = -Math.PI / 2; // Gap position at top (centered, -90 degrees / 270 degrees)
+        const ROTATION_SPEED = (Math.PI / 2) * 0.6; // Rotation speed in radians per second (40% slower: 54 degrees per second)
+        const GRAVITY = 980; // pixels per second squared (set to 980)
+        const BOUNCE_DAMPING = 0.98; // Bounciness factor (0-1, higher = more bouncy) - increased for rapid bouncing
+        const ESCAPE_COLOR_DURATION = 0.5; // seconds to show yellow after escape
+        
+        // Spawn position (top center, just inside boundary)
+        // In p5.js: Y=0 is top, Y increases downward
+        const CENTER_X = CANVAS_SIZE / 2;
+        const CENTER_Y = CANVAS_SIZE / 2;
+        const SPAWN_X = CENTER_X; // Center horizontally
+        // Calculate top spawn: circle center minus radius gives top edge, add ball radius to be inside
+        const SPAWN_Y = CENTER_Y - BOUNDARY_RADIUS + BALL_RADIUS + 5; // Top of circle, inside by ball radius
+        
+        // Color palette for balls (cycling through vibrant colors)
+        const BALL_COLORS = [
+            [0, 255, 0],    // Green
+            [255, 20, 147], // Pink
+            [128, 0, 128],  // Purple
+            [255, 255, 255], // White
+            [255, 0, 0],    // Red
+            [255, 255, 0]   // Yellow
+        ];
+        
+        // Global state
+        let activeBall = null; // Only one active ball at a time
+        let frozenBalls = []; // Balls that have frozen after 2 seconds
+        let confettiParticles = []; // Confetti particles for explosion effect
+        let collisionParticles = []; // Collision effect particles
+        let gameStarted = false;
+        let ballCounter = 0; // Counter for ball numbering
+        let gameTimer = 0; // Timer for current ball (0-2 seconds)
+        let circleColorTimer = 0; // Timer for circle color cycle (0-5 seconds)
+        let escapeFlashTimer = 0; // Timer for escape flash effect
+        let lastFrameTime = 0;
+        let gameWon = false;
+        let circleRotation = 0; // Current rotation angle of the circle in radians
+        let audioContext = null; // Web Audio API context
+        let startAnimationTimer = 0; // Timer for start screen animation (pulse/glow)
+        
+        // Progressive difficulty
+        let baseRotationSpeed = ROTATION_SPEED;
+        let baseGapSize = GAP_SIZE;
+        let totalGameTime = 0; // Total time since game started
+        let currentGapSize = GAP_SIZE; // Current gap size (for collision detection)
+        
+        // Visual effects
+        let screenShakeX = 0;
+        let screenShakeY = 0;
+        let screenShakeIntensity = 0;
+        let screenShakeDecay = 0.9;
+        
+        // Initialize audio context (lazy initialization)
+        function initAudioContext() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                // Resume audio context if suspended (required by some browsers)
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+            }
+            return audioContext;
+        }
+        
+        // Play a marble striking glass sound
+        function playCollisionSound(pitch = 1.0, isBoundary = false) {
+            try {
+                const ctx = initAudioContext();
+                
+                // Resume audio context if suspended (required for immediate playback)
+                if (ctx.state === 'suspended') {
+                    ctx.resume();
+                }
+                
+                const oscillator = ctx.createOscillator();
+                const gainNode = ctx.createGain();
+                
+                // Connect oscillator to gain node to output
+                oscillator.connect(gainNode);
+                gainNode.connect(ctx.destination);
+                
+                // Use sine wave for lighter, softer sound
+                oscillator.type = 'sine';
+                
+                // Base frequency for boundary hits (higher pitch for lighter sound)
+                // Higher frequency for ball-to-ball hits (varies by pitch parameter)
+                const baseFreq = isBoundary ? 600 : 750 * pitch; // Boundary: 600Hz (was 400Hz), Ball-to-ball: 750Hz base (was 500Hz)
+                oscillator.frequency.value = baseFreq; // Set frequency immediately
+                
+                // Create instant attack and decay envelope for a lighter "plink" sound (no delay)
+                const now = ctx.currentTime;
+                gainNode.gain.setValueAtTime(0.25, now); // Softer volume (was 0.4), instant attack
+                gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.12); // Slightly faster decay for crispness
+                
+                // Start and stop the oscillator immediately
+                oscillator.start(now);
+                oscillator.stop(now + 0.12); // Match decay duration
+            } catch (e) {
+                // Silently fail if audio context can't be created (e.g., user interaction required)
+                console.log('Audio not available:', e);
+            }
+        }
+        
+        // Collision Effect Particle class
+        class CollisionParticle {
+            constructor(x, y, normalX, normalY, color) {
+                this.x = x;
+                this.y = y;
+                // Particles shoot outward along the collision normal (opposite to ball impact)
+                const outwardAngle = Math.atan2(normalY, normalX); // Direction from center outward
+                const speed = 150 + Math.random() * 100; // pixels per second
+                const angleVariation = (Math.random() - 0.5) * 1.0; // Wider spread (about 57 degrees total)
+                const angle = outwardAngle + angleVariation;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                // Use the ball's color at collision moment, brightened for visibility
+                const baseColor = color || [255, 255, 200]; // Default to white/yellow if no color provided
+                // Brighten the color slightly for better visibility
+                this.color = [
+                    Math.min(255, Math.floor(baseColor[0] * 1.2)),
+                    Math.min(255, Math.floor(baseColor[1] * 1.2)),
+                    Math.min(255, Math.floor(baseColor[2] * 1.2))
+                ];
+                // Size and life - made more visible
+                this.size = 5 + Math.random() * 5; // Larger particles (5-10 instead of 4-8)
+                this.life = 0.6; // Longer-lived sparks (0.6 seconds)
+                this.maxLife = 0.6;
+            }
+            
+            update(deltaTime) {
+                // Update position
+                this.x += this.vx * deltaTime;
+                this.y += this.vy * deltaTime;
+                // Fade out
+                this.life -= deltaTime;
+            }
+            
+            draw() {
+                const alpha = Math.max(0, (this.life / this.maxLife) * 255);
+                fill(this.color[0], this.color[1], this.color[2], alpha);
+                noStroke();
+                ellipse(this.x, this.y, this.size, this.size);
+            }
+            
+            isDead() {
+                return this.life <= 0;
+            }
+        }
+        
+        // Confetti Particle class
+        class ConfettiParticle {
+            constructor(x, y, speedMultiplier = 1.0) {
+                this.x = x;
+                this.y = y;
+                // Random velocity in all directions with varied speeds for more dynamic explosion
+                const baseSpeed = (150 + Math.random() * 300) * speedMultiplier; // pixels per second
+                const angle = Math.random() * Math.PI * 2;
+                this.vx = Math.cos(angle) * baseSpeed;
+                this.vy = Math.sin(angle) * baseSpeed;
+                
+                // Vibrant color palette for confetti
+                const vibrantColors = [
+                    [255, 0, 0],      // Red
+                    [255, 165, 0],    // Orange
+                    [255, 255, 0],    // Yellow
+                    [0, 255, 0],      // Green
+                    [0, 0, 255],      // Blue
+                    [128, 0, 128],    // Purple
+                    [255, 20, 147],   // Pink
+                    [255, 255, 255],  // White
+                    [0, 255, 255],    // Cyan
+                    [255, 192, 203]   // Light Pink
+                ];
+                const colorIdx = Math.floor(Math.random() * vibrantColors.length);
+                this.color = vibrantColors[colorIdx];
+                
+                // Varied sizes for more visual interest
+                this.size = speedMultiplier > 1.0 ? (6 + Math.random() * 10) : (4 + Math.random() * 8);
+                this.life = 1.5; // Longer life for better visibility
+                this.maxLife = 1.5;
+                this.rotation = Math.random() * Math.PI * 2;
+                this.rotationSpeed = (Math.random() - 0.5) * 15; // Faster rotation
+                
+                // Shape type: 0 = rectangle, 1 = circle, 2 = triangle
+                this.shapeType = Math.floor(Math.random() * 3);
+                
+                // Add slight size pulsing effect
+                this.sizePulse = 1.0;
+                this.pulseSpeed = 2 + Math.random() * 3;
+            }
+            
+            update(deltaTime) {
+                // Apply lighter gravity for floating effect
+                this.vy += GRAVITY * 0.3 * deltaTime; // Lighter than balls
+                // Update position
+                this.x += this.vx * deltaTime;
+                this.y += this.vy * deltaTime;
+                // Update rotation
+                this.rotation += this.rotationSpeed * deltaTime;
+                // Update size pulse
+                this.sizePulse = 1.0 + Math.sin(this.pulseSpeed * (this.maxLife - this.life)) * 0.2;
+                // Decrease life
+                this.life -= deltaTime * 0.4; // Fade out over ~3.75 seconds
+            }
+            
+            draw() {
+                push();
+                translate(this.x, this.y);
+                rotate(this.rotation);
+                
+                const alpha = Math.max(0, (this.life / this.maxLife) * 255);
+                const currentSize = this.size * this.sizePulse;
+                
+                fill(this.color[0], this.color[1], this.color[2], alpha);
+                noStroke();
+                
+                // Draw different shapes for variety
+                if (this.shapeType === 0) {
+                    // Rectangle
+                    rectMode(CENTER);
+                    rect(0, 0, currentSize, currentSize * 0.6);
+                } else if (this.shapeType === 1) {
+                    // Circle
+                    ellipse(0, 0, currentSize, currentSize);
+                } else {
+                    // Triangle
+                    beginShape();
+                    vertex(0, -currentSize * 0.5);
+                    vertex(-currentSize * 0.4, currentSize * 0.5);
+                    vertex(currentSize * 0.4, currentSize * 0.5);
+                    endShape(CLOSE);
+                }
+                
+                // Add glow effect for extra sparkle
+                fill(this.color[0], this.color[1], this.color[2], alpha * 0.3);
+                ellipse(0, 0, currentSize * 1.5, currentSize * 1.5);
+                
+                pop();
+            }
+            
+            isDead() {
+                return this.life <= 0;
+            }
+        }
+        
+        // Ball class
+        class Ball {
+            constructor(spawnX, spawnY, ballNumber) {
+                // Spawn at fixed location (top center of circle)
+                this.x = spawnX;
+                this.y = spawnY;
+                this.ballNumber = ballNumber; // Store the ball's number
+                
+                // Ensure ball is positioned correctly at top of circle
+                // Explicitly set position to avoid any initialization issues
+                const centerX = CANVAS_SIZE / 2;
+                const centerY = CANVAS_SIZE / 2;
+                this.x = centerX; // Center horizontally
+                this.y = centerY - BOUNDARY_RADIUS + BALL_RADIUS + 5; // Top of circle, inside by ball radius
+                
+                // Initial velocity: mostly downward with random angle variation (up to 20 degrees left/right)
+                // 50% of previous speed
+                const speed = (50 + Math.random() * 50) * 9.0 * 0.33; // Downward velocity between 148.5-297 pixels per second (50% of previous)
+                const angleVariation = (Math.random() * 40 - 20) * (Math.PI / 180); // Random angle between -20 and +20 degrees
+                const downwardAngle = Math.PI / 2 + angleVariation; // Straight down (π/2) plus variation
+                this.vx = Math.cos(downwardAngle) * speed;
+                this.vy = Math.sin(downwardAngle) * speed;
+                
+                // Ball state
+                this.frozen = false;
+                this.spawnTime = 0; // Set when ball is activated
+                this.freezeTime = 0; // Time when ball was frozen (for color calculation)
+                this.initialColor = null; // Store the color when ball was first dropped (at timer = 0)
+                this.frozenColor = null; // Store the color when ball freezes
+                this.ballColorTimer = 0; // Timer for ball's independent color cycle
+                this.ballColorCycleDuration = BALL_COLOR_CYCLE_MIN + Math.random() * (BALL_COLOR_CYCLE_MAX - BALL_COLOR_CYCLE_MIN); // Random cycle duration between 2.5-3 seconds
+                
+                // Trail for ball movement
+                this.trail = []; // Array of {x, y, time} objects
+                this.trailMaxLength = 20; // Maximum number of trail points
+                this.trailDuration = 0.5; // Trail fades out over 0.5 seconds
+            }
+            
+            update(deltaTime, frozenBallsList) {
+                if (this.frozen) return; // Don't update frozen balls
+                
+                // Update ball's color timer (use modulo for continuous cycling)
+                this.ballColorTimer = (this.ballColorTimer + deltaTime) % this.ballColorCycleDuration;
+                
+                // Update trail - add current position and age existing points
+                // Age all existing trail points
+                for (let i = 0; i < this.trail.length; i++) {
+                    this.trail[i].age += deltaTime;
+                }
+                
+                // Add current position to trail
+                this.trail.push({x: this.x, y: this.y, age: 0});
+                
+                // Remove old trail points (older than trailDuration)
+                this.trail = this.trail.filter(point => point.age <= this.trailDuration);
+                
+                // Limit trail length
+                if (this.trail.length > this.trailMaxLength) {
+                    this.trail.shift(); // Remove oldest point
+                }
+                
+                // Apply gravity
+                this.vy += GRAVITY * deltaTime;
+                
+                // Update position (velocity is in pixels per second)
+                this.x += this.vx * deltaTime;
+                this.y += this.vy * deltaTime;
+                
+                // Check collision with frozen balls (passed as parameter)
+                if (frozenBallsList) {
+                    for (let frozenBall of frozenBallsList) {
+                        const dx = frozenBall.x - this.x;
+                        const dy = frozenBall.y - this.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+                        
+                        if (distance < BALL_RADIUS * 2 && distance > 0) {
+                            // Collision with frozen ball - bouncy elastic bounce
+                            const angle = Math.atan2(dy, dx);
+                            const normalX = Math.cos(angle);
+                            const normalY = Math.sin(angle);
+                            
+                            // Get ball's current color for collision effect
+                            const ballColor = this.getBallColor();
+                            
+                            // Create collision effect particles
+                            const numParticles = 8;
+                            for (let i = 0; i < numParticles; i++) {
+                                const particle = new CollisionParticle(this.x, this.y, -normalX, -normalY, ballColor);
+                                collisionParticles.push(particle);
+                            }
+                            
+                            // Reflect velocity vector with bounce damping
+                            const dot = this.vx * normalX + this.vy * normalY;
+                            this.vx = (this.vx - 2 * dot * normalX) * BOUNCE_DAMPING;
+                            this.vy = (this.vy - 2 * dot * normalY) * BOUNCE_DAMPING;
+                            
+                            // Separate balls
+                            const overlap = BALL_RADIUS * 2 - distance;
+                            this.x -= normalX * overlap * 0.5;
+                            this.y -= normalY * overlap * 0.5;
+                            
+                            // Screen shake disabled
+                            
+                            // Play collision sound with varying pitch based on frozen ball
+                            // Use frozen ball's position to create a consistent but varied pitch for each ball
+                            const ballHash = Math.floor(frozenBall.x * 7 + frozenBall.y * 11) % 20; // Create hash from position
+                            const pitchVariation = 0.85 + (ballHash / 20) * 0.3; // Vary between 0.85 and 1.15
+                            playCollisionSound(pitchVariation, false);
+                        }
+                    }
+                }
+                
+                // Check collision with circular boundary (excluding gap)
+                const centerX = CANVAS_SIZE / 2;
+                const centerY = CANVAS_SIZE / 2;
+                const dx = this.x - centerX;
+                const dy = this.y - centerY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                const angle = Math.atan2(dy, dx);
+                
+                // Collision detection: ball edge touches boundary interior
+                const effectiveRadius = BOUNDARY_RADIUS - BALL_RADIUS;
+                
+                if (distance > effectiveRadius) {
+                    // Check if ball is in the gap (gap is fixed at top, no rotation)
+                    const normalizedAngle = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+                    const currentGapAngle = ((GAP_ANGLE % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2); // Fixed at top, no rotation
+                    const gapStart = ((currentGapAngle - currentGapSize / 2) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+                    const gapEnd = ((currentGapAngle + currentGapSize / 2) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+            
+            let inGap = false;
+                    if (gapStart < gapEnd) {
+                        inGap = normalizedAngle >= gapStart && normalizedAngle <= gapEnd;
+            } else {
+                // Gap wraps around
+                        inGap = normalizedAngle >= gapStart || normalizedAngle <= gapEnd;
+                    }
+                    
+                    if (!inGap) {
+                        // Collision occurred - bouncy elastic bounce
+                        const normalX = Math.cos(angle);
+                        const normalY = Math.sin(angle);
+                        
+                        // Get ball's current color for collision effect
+                        const ballColor = this.getBallColor();
+                        
+                        // Create collision effect particles at collision point
+                        const collisionX = centerX + normalX * BOUNDARY_RADIUS;
+                        const collisionY = centerY + normalY * BOUNDARY_RADIUS;
+                        const numParticles = 12; // Increased for more visual impact
+                        for (let i = 0; i < numParticles; i++) {
+                            const particle = new CollisionParticle(collisionX, collisionY, normalX, normalY, ballColor);
+                            collisionParticles.push(particle);
+                        }
+                        
+                        // Screen shake disabled
+                        
+                        // Reflect velocity vector with bounce damping
+                        const dot = this.vx * normalX + this.vy * normalY;
+                        this.vx = (this.vx - 2 * dot * normalX) * BOUNCE_DAMPING;
+                        this.vy = (this.vy - 2 * dot * normalY) * BOUNCE_DAMPING;
+                        
+                        // Push ball back inside boundary
+                        this.x = centerX + normalX * effectiveRadius;
+                        this.y = centerY + normalY * effectiveRadius;
+                        
+                        // Play collision sound with consistent pitch for boundary hits
+                        playCollisionSound(1.0, true);
+                    }
+                }
+                
+            }
+            
+            // Check if ball has escaped through the gap
+            hasEscaped() {
+                const centerX = CANVAS_SIZE / 2;
+                const centerY = CANVAS_SIZE / 2;
+                const dx = this.x - centerX;
+                const dy = this.y - centerY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                return distance > BOUNDARY_RADIUS + BALL_RADIUS;
+            }
+            
+            // Get color based on ball's own timer (2.5-3 seconds cycle)
+            // Red → Green → Blue gradient
+            getBallColor() {
+                const normalizedTime = this.ballColorTimer / this.ballColorCycleDuration; // 0 to 1
+                
+                let red, green, blue;
+                
+                if (normalizedTime < 1/3) {
+                    // First third: Red → Green
+                    const progress = normalizedTime * 3; // 0 to 1
+                    red = Math.floor(255 * (1 - progress));
+                    green = Math.floor(255 * progress);
+                    blue = 0;
+                } else if (normalizedTime < 2/3) {
+                    // Second third: Green → Blue
+                    const progress = (normalizedTime - 1/3) * 3; // 0 to 1
+                    red = 0;
+                    green = Math.floor(255 * (1 - progress));
+                    blue = Math.floor(255 * progress);
+                } else {
+                    // Third third: Blue → Red
+                    const progress = (normalizedTime - 2/3) * 3; // 0 to 1
+                    red = Math.floor(255 * progress);
+                    green = 0;
+                    blue = Math.floor(255 * (1 - progress));
+                }
+                
+                // Brighten colors significantly for high contrast (increase intensity by 30%)
+                red = Math.min(255, Math.floor(red * 1.3));
+                green = Math.min(255, Math.floor(green * 1.3));
+                blue = Math.min(255, Math.floor(blue * 1.3));
+                
+                return [red, green, blue];
+            }
+            
+            // Get color based on circle timer (for initial color storage)
+            // Red → Green → Blue gradient
+            getColor(timer) {
+                const normalizedTime = timer / CIRCLE_COLOR_CYCLE; // 0 to 1
+                
+                let red, green, blue;
+                
+                if (normalizedTime < 1/3) {
+                    // First third: Red → Green
+                    const progress = normalizedTime * 3; // 0 to 1
+                    red = Math.floor(255 * (1 - progress));
+                    green = Math.floor(255 * progress);
+                    blue = 0;
+                } else if (normalizedTime < 2/3) {
+                    // Second third: Green → Blue
+                    const progress = (normalizedTime - 1/3) * 3; // 0 to 1
+                    red = 0;
+                    green = Math.floor(255 * (1 - progress));
+                    blue = Math.floor(255 * progress);
+                } else {
+                    // Third third: Blue → Red
+                    const progress = (normalizedTime - 2/3) * 3; // 0 to 1
+                    red = Math.floor(255 * progress);
+                    green = 0;
+                    blue = Math.floor(255 * (1 - progress));
+                }
+                
+                return [red, green, blue];
+            }
+            
+            draw() {
+                // Get color based on ball's own timer
+                // For frozen balls, use their frozen color (when they froze)
+                // For active balls, use their own color cycle
+                let color;
+                if (this.frozen && this.frozenColor) {
+                    color = this.frozenColor; // Use the color from when ball froze
+                } else {
+                    color = this.getBallColor(); // Use ball's independent color cycle
+                }
+                
+                // Draw trail for active balls
+                if (!this.frozen && this.trail.length > 1) {
+                    noStroke();
+                    
+                    for (let i = 0; i < this.trail.length - 1; i++) {
+                        const point = this.trail[i];
+                        const ageRatio = point.age / this.trailDuration;
+                        const alpha = Math.max(0, 255 * (1 - ageRatio));
+                        
+                        // Fade trail from ball color to transparent
+                        fill(color[0], color[1], color[2], alpha * 0.6);
+                        const trailSize = BALL_RADIUS * 2 * (1 - ageRatio);
+                        ellipse(point.x, point.y, trailSize, trailSize);
+                    }
+                }
+                
+                // Draw glass-like ball with multiple layers
+                noStroke();
+                
+                // Enhanced glow effects for better visibility
+                // Outer glow (soft, translucent) - larger and brighter
+                fill(color[0], color[1], color[2], 60);
+                ellipse(this.x, this.y, BALL_RADIUS * 2 + 8, BALL_RADIUS * 2 + 8);
+                
+                // Middle glow - brighter
+                fill(color[0], color[1], color[2], 120);
+                ellipse(this.x, this.y, BALL_RADIUS * 2 + 4, BALL_RADIUS * 2 + 4);
+                
+                // Inner glow
+                fill(color[0], color[1], color[2], 100);
+                ellipse(this.x, this.y, BALL_RADIUS * 2 + 2, BALL_RADIUS * 2 + 2);
+                
+                // Main ball body (semi-transparent)
+                fill(color[0], color[1], color[2], 240);
+                ellipse(this.x, this.y, BALL_RADIUS * 2, BALL_RADIUS * 2);
+                
+                // Outer stroke (bright, translucent) - thicker
+                noFill();
+                stroke(color[0], color[1], color[2], 255);
+                strokeWeight(3);
+                ellipse(this.x, this.y, BALL_RADIUS * 2, BALL_RADIUS * 2);
+                
+                // Draw ball number instead of white highlight
+                fill(255, 255, 255, 255); // White text
+                noStroke();
+                textAlign(CENTER, CENTER);
+                textSize(BALL_RADIUS * 1.2); // Text size proportional to ball radius
+                textStyle(BOLD);
+                text(this.ballNumber.toString(), this.x, this.y);
+                
+                // Inner stroke (bright white, thin)
+                noFill();
+                stroke(255, 255, 255, 240);
+                strokeWeight(2);
+                ellipse(this.x, this.y, BALL_RADIUS * 2 - 3, BALL_RADIUS * 2 - 3);
+            }
+        }
+        
+        // Setup function - called once at start
+        function setup() {
+            createCanvas(CANVAS_SIZE, CANVAS_SIZE);
+            background(0);
+            lastFrameTime = millis();
+            
+            // Hide all buttons for passive screen recording
+            const startButton = document.getElementById('startButton');
+            const restartButton = document.getElementById('restartButton');
+            if (startButton) startButton.classList.add('hidden');
+            if (restartButton) restartButton.classList.add('hidden');
+            
+            // Auto-start after brief delay for hook optimization
+            setTimeout(() => {
+                initAudioContext();
+                startAnimationTimer = 0.5;
+                gameStarted = true;
+                spawnNewBall();
+            }, 500); // 0.5 second delay for immediate visual interest
+        }
+        
+        // Reset game to initial state (for continuous loop)
+        function resetGame() {
+            // Clear all balls
+            activeBall = null;
+            frozenBalls = [];
+            confettiParticles = [];
+            collisionParticles = [];
+            
+            // Reset game state
+            gameTimer = 0;
+            circleColorTimer = 0;
+            escapeFlashTimer = 0;
+            gameWon = false;
+            startAnimationTimer = 0;
+            circleRotation = 0;
+            screenShakeIntensity = 0;
+            
+            // Keep game running for continuous loop
+            gameStarted = true;
+            
+            // Spawn new ball immediately for continuous play
+            setTimeout(() => {
+                spawnNewBall();
+            }, 0.1);
+        }
+        
+        // Spawn a new ball at the spawn location
+        function spawnNewBall() {
+            // Only spawn if no active ball exists
+            if (activeBall === null) {
+                ballCounter++; // Increment ball counter
+                activeBall = new Ball(SPAWN_X, SPAWN_Y, ballCounter);
+                activeBall.spawnTime = gameTimer;
+                // Store initial color based on current ball color cycle (when first dropped)
+                activeBall.initialColor = activeBall.getBallColor();
+                gameTimer = 0; // Reset timer for new ball
+            }
+        }
+        
+        // Confetti burst system for layered explosions
+        let confettiBursts = [];
+        
+        class ConfettiBurst {
+            constructor(x, y, numParticles, speedMultiplier, delay = 0) {
+                this.x = x;
+                this.y = y;
+                this.numParticles = numParticles;
+                this.speedMultiplier = speedMultiplier;
+                this.delay = delay;
+                this.timer = 0;
+                this.triggered = false;
+            }
+            
+            update(deltaTime) {
+                this.timer += deltaTime;
+                if (!this.triggered && this.timer >= this.delay) {
+                    this.triggered = true;
+                    // Create particles with slight offset for variety
+                    for (let i = 0; i < this.numParticles; i++) {
+                        const offsetX = this.x + (Math.random() - 0.5) * 15;
+                        const offsetY = this.y + (Math.random() - 0.5) * 15;
+                        const particle = new ConfettiParticle(offsetX, offsetY, this.speedMultiplier);
+                        confettiParticles.push(particle);
+                    }
+                }
+            }
+            
+            isComplete() {
+                return this.triggered;
+            }
+        }
+        
+        // Create confetti explosion at given position
+        function createConfettiExplosion(x, y, enhanced = false) {
+            // Create a spectacular explosion with many particles
+            const numParticles = enhanced ? 200 : 150; // More particles for dramatic effect
+            const speedMultiplier = enhanced ? 2.5 : 2.0; // Faster particles for more energy
+            
+            // Immediate burst for instant impact
+            for (let i = 0; i < numParticles; i++) {
+                const particle = new ConfettiParticle(x, y, speedMultiplier);
+                confettiParticles.push(particle);
+            }
+            
+            // Add delayed bursts for layered effect
+            confettiBursts.push(new ConfettiBurst(x, y, numParticles * 0.3, speedMultiplier * 0.8, 0.1));
+            confettiBursts.push(new ConfettiBurst(x, y, numParticles * 0.2, speedMultiplier * 0.6, 0.2));
+        }
+        
+        // Add screen shake effect
+        function addScreenShake(intensity) {
+            screenShakeIntensity = Math.max(screenShakeIntensity, intensity);
+        }
+        
+        // Draw function - called every frame (target: 60 FPS)
+        function draw() {
+            if (!gameStarted) {
+                // Show static boundary before game starts
+                background(0);
+                drawBoundary();
+                return;
+            }
+
+            // Calculate delta time for frame-rate independent updates
+            const currentTime = millis();
+            const deltaTime = (currentTime - lastFrameTime) / 1000.0; // Convert to seconds
+            lastFrameTime = currentTime;
+            
+            // Update total game time for progressive difficulty
+            totalGameTime += deltaTime;
+            
+            // Progressive difficulty: increase rotation speed over time
+            // Speed increases gradually, maxing out at 2x after 60 seconds
+            const rotationSpeedMultiplier = 1.0 + Math.min(totalGameTime / 60.0, 1.0);
+            const currentRotationSpeed = baseRotationSpeed * rotationSpeedMultiplier;
+            
+            // Progressive difficulty: reduce gap size over time (but keep it passable)
+            // Gap reduces from 100% to 70% over 60 seconds (ball radius * 2 = ~16.5, gap needs to be at least ~20 radians to fit)
+            const minGapSize = (BALL_RADIUS * 2) / BOUNDARY_RADIUS * 1.3; // Minimum gap size in radians (30% larger than ball diameter)
+            const gapSizeMultiplier = 1.0 - Math.min(totalGameTime / 60.0, 0.3); // Reduce by up to 30%
+            currentGapSize = Math.max(baseGapSize * gapSizeMultiplier, minGapSize);
+            
+            // Update circle color timer (cycles every 5 seconds, use modulo for continuous cycling)
+            circleColorTimer = (circleColorTimer + deltaTime) % CIRCLE_COLOR_CYCLE;
+            
+            // Update circle rotation (continuous rotation with progressive speed)
+            circleRotation = (circleRotation + currentRotationSpeed * deltaTime) % (Math.PI * 2);
+            
+            // Screen shake disabled
+            screenShakeIntensity = 0;
+            screenShakeX = 0;
+            screenShakeY = 0;
+            
+            // Update game timer for current ball
+            if (activeBall && !activeBall.frozen && !gameWon) {
+                gameTimer += deltaTime;
+                
+                // Check if time limit has passed
+                if (gameTimer >= TIME_LIMIT) {
+                    // Freeze the ball
+                    activeBall.frozen = true;
+                    activeBall.freezeTime = TIME_LIMIT; // Store the timer value when frozen
+                    activeBall.frozenColor = activeBall.getBallColor(); // Store the color at the moment it freezes
+                    frozenBalls.push(activeBall);
+                    activeBall = null;
+                    
+                    // Spawn new ball if game hasn't been won (continuous loop)
+                    if (!gameWon) {
+                        spawnNewBall();
+                    }
+                }
+            }
+            
+            // Update escape flash timer
+            if (escapeFlashTimer > 0) {
+                escapeFlashTimer -= deltaTime;
+                if (escapeFlashTimer < 0) {
+                    escapeFlashTimer = 0;
+                }
+            }
+            
+            // Update start animation timer
+            if (startAnimationTimer > 0) {
+                startAnimationTimer -= deltaTime;
+                if (startAnimationTimer < 0) {
+                    startAnimationTimer = 0;
+                }
+            }
+            
+            // Clear canvas with black background
+            background(0);
+            
+            // Draw boundary circle with gap (with progressive gap size)
+            drawBoundary(currentGapSize);
+            
+            // Draw caption
+            drawCaption();
+            
+            // Draw countdown timer
+            drawCountdownTimer();
+            
+            // Draw frozen balls
+            frozenBalls.forEach(ball => {
+                ball.draw();
+            });
+            
+            // Update and draw active ball
+            if (activeBall && !gameWon) {
+                // Check for escape
+                if (activeBall.hasEscaped()) {
+                    // Ball escaped! Create confetti explosion
+                    createConfettiExplosion(activeBall.x, activeBall.y, true);
+                    
+                    // Clear all frozen balls and reset for continuous loop
+                    frozenBalls = [];
+                    confettiParticles = [];
+                    confettiBursts = [];
+                    collisionParticles = [];
+                    escapeFlashTimer = ESCAPE_COLOR_DURATION;
+                    activeBall = null;
+                    
+                    // Spawn new ball after brief delay for continuous play
+                    setTimeout(() => {
+                        if (!gameWon) {
+                            spawnNewBall();
+                        }
+                    }, 500);
+                } else {
+                    // Update ball physics (pass frozen balls for collision detection)
+                    activeBall.update(deltaTime, frozenBalls);
+                    
+                    // Draw ball (uses its own color cycle)
+                    activeBall.draw();
+                }
+            }
+            
+            // Update confetti bursts
+            for (let i = confettiBursts.length - 1; i >= 0; i--) {
+                const burst = confettiBursts[i];
+                burst.update(deltaTime);
+                if (burst.isComplete()) {
+                    confettiBursts.splice(i, 1);
+                }
+            }
+            
+            // Update and draw confetti particles
+            for (let i = confettiParticles.length - 1; i >= 0; i--) {
+                const particle = confettiParticles[i];
+                particle.update(deltaTime);
+                particle.draw();
+                
+                // Remove dead particles
+                if (particle.isDead()) {
+                    confettiParticles.splice(i, 1);
+                }
+            }
+            
+            // Update and draw collision effect particles
+            for (let i = collisionParticles.length - 1; i >= 0; i--) {
+                const particle = collisionParticles[i];
+                particle.update(deltaTime);
+                particle.draw();
+                
+                // Remove dead particles
+                if (particle.isDead()) {
+                    collisionParticles.splice(i, 1);
+                }
+            }
+        }
+        
+        // Draw the boundary circle with gap and color based on timer state
+        function drawBoundary(gapSize = GAP_SIZE) {
+            const centerX = CANVAS_SIZE / 2;
+            const centerY = CANVAS_SIZE / 2;
+            
+            let boundaryColor;
+            
+            // Check if we should show escape flash (bright yellow)
+            if (escapeFlashTimer > 0) {
+                // Bright yellow flash when ball escapes
+                boundaryColor = [255, 255, 0]; // Bright yellow
+            } else if (!gameStarted) {
+                // Red before game starts
+                boundaryColor = [255, 0, 0]; // Red
+            } else {
+                // Normal timer-based coloring (5 second cycle) - Red → Green → Blue gradient
+                const normalizedTime = circleColorTimer / CIRCLE_COLOR_CYCLE; // 0 to 1
+                
+                let red, green, blue;
+                
+                if (normalizedTime < 1/3) {
+                    // First third: Red → Green
+                    const progress = normalizedTime * 3; // 0 to 1
+                    red = Math.floor(255 * (1 - progress));
+                    green = Math.floor(255 * progress);
+                    blue = 0;
+                } else if (normalizedTime < 2/3) {
+                    // Second third: Green → Blue
+                    const progress = (normalizedTime - 1/3) * 3; // 0 to 1
+                    red = 0;
+                    green = Math.floor(255 * (1 - progress));
+                    blue = Math.floor(255 * progress);
+                } else {
+                    // Third third: Blue → Red
+                    const progress = (normalizedTime - 2/3) * 3; // 0 to 1
+                    red = Math.floor(255 * progress);
+                    green = 0;
+                    blue = Math.floor(255 * (1 - progress));
+                }
+                
+                // Brighten colors significantly for high contrast (increase intensity by 30%)
+                red = Math.min(255, Math.floor(red * 1.3));
+                green = Math.min(255, Math.floor(green * 1.3));
+                blue = Math.min(255, Math.floor(blue * 1.3));
+                
+                boundaryColor = [red, green, blue];
+                
+                // Color pop effect during start animation - brighten and flash more dramatically
+                if (startAnimationTimer > 0) {
+                    const popIntensity = startAnimationTimer / 0.5; // Fade from 1 to 0 over 0.5 seconds
+                    const flashMultiplier = 1.0 + (1.0 - popIntensity) * 1.5; // Brighten up to 150% more (was 80%)
+                    red = Math.min(255, Math.floor(red * flashMultiplier));
+                    green = Math.min(255, Math.floor(green * flashMultiplier));
+                    blue = Math.min(255, Math.floor(blue * flashMultiplier));
+                    boundaryColor = [red, green, blue];
+                }
+            }
+            
+            // Calculate current gap position (fixed at top, no rotation)
+            const currentGapAngle = ((GAP_ANGLE % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2); // Fixed at top
+            let gapStart = currentGapAngle - gapSize / 2;
+            let gapEnd = currentGapAngle + gapSize / 2;
+            
+            // Normalize angles to 0-2π range
+            gapStart = ((gapStart % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+            gapEnd = ((gapEnd % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+            
+            // Draw pulse/glow effect during start animation - more visible
+            if (startAnimationTimer > 0) {
+                const pulseProgress = 1.0 - (startAnimationTimer / 0.5); // 0 to 1 over 0.5 seconds
+                const pulseAlpha = (1.0 - pulseProgress) * 200; // Fade from 200 to 0 (was 150)
+                const pulseSize = 1.0 + pulseProgress * 0.25; // Grow from 1.0 to 1.25 (was 1.15)
+                
+                // Draw outer glow ring - brighter and thicker
+                stroke(boundaryColor[0], boundaryColor[1], boundaryColor[2], pulseAlpha);
+                strokeWeight(12); // Thicker glow (was 8)
+                noFill();
+                
+                arc(centerX, centerY, BOUNDARY_RADIUS * 2 * pulseSize, BOUNDARY_RADIUS * 2 * pulseSize, 
+                    gapEnd, gapStart + Math.PI * 2);
+            }
+            
+            // Enhanced glass-like circle boundary effect - multiple layers for depth and visibility
+            noFill();
+            
+            // Outer glow layer (soft, translucent) - larger and brighter
+            stroke(boundaryColor[0], boundaryColor[1], boundaryColor[2], 80);
+            strokeWeight(20);
+            arc(centerX, centerY, BOUNDARY_RADIUS * 2 + 4, BOUNDARY_RADIUS * 2 + 4, 
+                gapEnd, gapStart + Math.PI * 2);
+            
+            // Middle glow layer - brighter
+            stroke(boundaryColor[0], boundaryColor[1], boundaryColor[2], 140);
+            strokeWeight(14);
+            arc(centerX, centerY, BOUNDARY_RADIUS * 2 + 2, BOUNDARY_RADIUS * 2 + 2, 
+                gapEnd, gapStart + Math.PI * 2);
+            
+            // Inner glow layer
+            stroke(boundaryColor[0], boundaryColor[1], boundaryColor[2], 120);
+            strokeWeight(10);
+            arc(centerX, centerY, BOUNDARY_RADIUS * 2 + 1, BOUNDARY_RADIUS * 2 + 1, 
+                gapEnd, gapStart + Math.PI * 2);
+            
+            // Main stroke (bright, semi-transparent) - thicker
+            stroke(boundaryColor[0], boundaryColor[1], boundaryColor[2], 255);
+            strokeWeight(8);
+            arc(centerX, centerY, BOUNDARY_RADIUS * 2, BOUNDARY_RADIUS * 2, 
+                gapEnd, gapStart + Math.PI * 2);
+            
+            // Inner highlight (bright, thin) - brighter
+            stroke(255, 255, 255, 220);
+            strokeWeight(4);
+            arc(centerX, centerY, BOUNDARY_RADIUS * 2 - 3, BOUNDARY_RADIUS * 2 - 3, 
+                gapEnd, gapStart + Math.PI * 2);
+            
+            // Inner glow (subtle) - brighter
+            stroke(boundaryColor[0], boundaryColor[1], boundaryColor[2], 120);
+            strokeWeight(5);
+            arc(centerX, centerY, BOUNDARY_RADIUS * 2 - 2, BOUNDARY_RADIUS * 2 - 2, 
+                gapEnd, gapStart + Math.PI * 2);
+            
+        }
+        
+        // Draw caption text
+        function drawCaption() {
+            if (!gameStarted) return; // Don't show caption before game starts
+            
+            // Draw caption text in white at the top, matching countdown number style
+            fill(255, 255, 255); // White
+            noStroke();
+            textAlign(CENTER, TOP);
+            textSize(28); // Larger size
+            textStyle(BOLD); // Bold to match countdown numbers
+            text("Each ball only has", CANVAS_SIZE / 2, 20);
+            text("4 Seconds to escape", CANVAS_SIZE / 2, 50);
+        }
+        
+        // Draw countdown timer in the center of the circle
+        function drawCountdownTimer() {
+            if (!gameStarted || !activeBall || activeBall.frozen || gameWon) return; // Don't show timer if no active ball or game won
+            
+            // Calculate remaining time
+            const remainingTime = TIME_LIMIT - gameTimer;
+            
+            // Only show countdown if there's time remaining
+            if (remainingTime > 0) {
+                // Get the countdown number with one decimal place
+                const countdownNumber = remainingTime.toFixed(1);
+                
+                // Draw countdown text in white, centered in the circle
+                fill(255, 255, 255); // White
+                noStroke(); // Remove any outline
+                textAlign(CENTER, CENTER);
+                textSize(72); // Large text size for visibility
+                textStyle(BOLD);
+                text(countdownNumber, CANVAS_SIZE / 2, CANVAS_SIZE / 2);
+            }
+        }
+        
+    </script>
+</body>
+</html>
+
